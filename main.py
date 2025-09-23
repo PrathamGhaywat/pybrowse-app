@@ -1,5 +1,7 @@
 import sys
 import os
+import sqlite3
+from datetime import datetime
 from PyQt6.QtCore import *
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import *
@@ -12,6 +14,134 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         return os.path.join(sys._MEIPASS, relative_path)  # type: ignore
     return os.path.join(os.path.abspath("."), relative_path)
+
+class BrowserDatabase:
+    """Handle SQLite database operations for browser history and sessions"""
+    
+    def __init__(self, db_path="pybrowse.db"):
+        self.db_path = db_path
+        self.init_database()
+    
+    def init_database(self):
+        """Initialize the database with required tables"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create history table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                title TEXT,
+                visit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                visit_count INTEGER DEFAULT 1
+            )
+        ''')
+        
+        # Create sessions table for tab restoration
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_name TEXT DEFAULT 'default',
+                tab_index INTEGER,
+                url TEXT NOT NULL,
+                title TEXT,
+                is_current_tab BOOLEAN DEFAULT 0,
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
+    def add_to_history(self, url, title=""):
+        """Add a URL to browsing history"""
+        if not url or url.startswith('file://'):
+            return  # Don't save local files or empty URLs
+            
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Check if URL already exists
+        cursor.execute('SELECT id, visit_count FROM history WHERE url = ?', (url,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing entry
+            cursor.execute('''
+                UPDATE history 
+                SET visit_count = visit_count + 1, 
+                    visit_time = CURRENT_TIMESTAMP,
+                    title = ?
+                WHERE id = ?
+            ''', (title, existing[0]))
+        else:
+            # Insert new entry
+            cursor.execute('''
+                INSERT INTO history (url, title, visit_count) 
+                VALUES (?, ?, 1)
+            ''', (url, title))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_history(self, limit=100):
+        """Get browsing history ordered by most recent"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT url, title, visit_time, visit_count 
+            FROM history 
+            ORDER BY visit_time DESC 
+            LIMIT ?
+        ''', (limit,))
+        
+        history = cursor.fetchall()
+        conn.close()
+        return history
+    
+    def save_session(self, tabs_data):
+        """Save current session (open tabs)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Clear existing session
+        cursor.execute('DELETE FROM sessions WHERE session_name = ?', ('default',))
+        
+        # Save current tabs
+        for i, (url, title, is_current) in enumerate(tabs_data):
+            cursor.execute('''
+                INSERT INTO sessions (session_name, tab_index, url, title, is_current_tab)
+                VALUES (?, ?, ?, ?, ?)
+            ''', ('default', i, url, title, is_current))
+        
+        conn.commit()
+        conn.close()
+    
+    def restore_session(self):
+        """Restore previous session tabs"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT tab_index, url, title, is_current_tab 
+            FROM sessions 
+            WHERE session_name = 'default'
+            ORDER BY tab_index
+        ''')
+        
+        session_data = cursor.fetchall()
+        conn.close()
+        return session_data
+    
+    def clear_history(self):
+        """Clear all browsing history"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM history')
+        conn.commit()
+        conn.close()
 
 
 
@@ -64,6 +194,9 @@ class Browser(QMainWindow):
         self.setWindowTitle("🚀 PyBrowse - Privacy-First Browser")
         self.setMinimumSize(1200, 800)
 
+        # Initialize database
+        self.db = BrowserDatabase()
+        
         self.search_interceptor = SearchInterceptor(self)
 
         self.tabs = QTabWidget()
@@ -116,10 +249,19 @@ class Browser(QMainWindow):
         stop_btn.triggered.connect(self.navigate_stop)
         navbar.addAction(stop_btn)
 
-        self.add_new_tab(None, '🚀 PyBrowse')
+        # Add separator and history button
+        navbar.addSeparator()
         
+        history_btn = QAction("📚", self)
+        history_btn.setStatusTip("View browsing history")
+        history_btn.triggered.connect(self.show_history)
+        navbar.addAction(history_btn)
+
         # Apply modern styling
         self.apply_modern_styling()
+        
+        # Restore previous session or create new tab
+        self.restore_previous_session()
 
         self.show()
 
@@ -163,6 +305,10 @@ class Browser(QMainWindow):
 
         browser.loadFinished.connect(lambda _, i=i, browser=browser:
                                      self.update_tab_title(i, browser))
+                                     
+        # Track page loads for history
+        browser.loadFinished.connect(lambda success, browser=browser:
+                                    self.add_to_history(browser) if success else None)
                                      
         # Also update tab title when URL changes (for immediate feedback)
         browser.urlChanged.connect(lambda qurl, browser=browser, i=i:
@@ -397,6 +543,122 @@ class Browser(QMainWindow):
                 
         return "🌐"  # Default fallback
 
+    def add_to_history(self, browser):
+        """Add current page to browsing history"""
+        if isinstance(browser, QWebEngineView):
+            url = browser.url().toString()
+            page = browser.page()
+            title = page.title() if page else ""
+            self.db.add_to_history(url, title)
+
+    def get_current_session_data(self):
+        """Get data for all currently open tabs"""
+        tabs_data = []
+        current_index = self.tabs.currentIndex()
+        
+        for i in range(self.tabs.count()):
+            browser = self.tabs.widget(i)
+            if isinstance(browser, QWebEngineView):
+                url = browser.url().toString()
+                page = browser.page()
+                title = page.title() if page else ""
+                is_current = (i == current_index)
+                tabs_data.append((url, title, is_current))
+        
+        return tabs_data
+
+    def save_current_session(self):
+        """Save current browser session to database"""
+        session_data = self.get_current_session_data()
+        self.db.save_session(session_data)
+
+    def restore_previous_session(self):
+        """Restore tabs from previous session"""
+        session_data = self.db.restore_session()
+        
+        if not session_data:
+            # No previous session, create default tab
+            self.add_new_tab()
+            return
+        
+        # Clear existing tabs first
+        while self.tabs.count() > 0:
+            self.tabs.removeTab(0)
+        
+        current_tab_index = 0
+        # Restore each tab
+        for tab_index, url, title, is_current in session_data:
+            if url:
+                qurl = QUrl(url)
+                self.add_new_tab(qurl, title or "Restored Tab")
+                if is_current:
+                    current_tab_index = tab_index
+        
+        # Set the previously active tab
+        if current_tab_index < self.tabs.count():
+            self.tabs.setCurrentIndex(current_tab_index)
+
+    def show_history(self):
+        """Show browsing history in a dialog"""
+        history_data = self.db.get_history(50)  # Get last 50 entries
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📚 Browsing History")
+        dialog.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Create history list widget
+        history_list = QListWidget()
+        
+        for url, title, visit_time, visit_count in history_data:
+            display_title = title if title else url
+            item_text = f"{display_title}\n{url}\nVisited: {visit_time} ({visit_count} times)"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, url)  # Store URL for navigation
+            history_list.addItem(item)
+        
+        # Double-click to navigate to URL
+        history_list.itemDoubleClicked.connect(self.navigate_to_history_item)
+        
+        layout.addWidget(history_list)
+        
+        # Add buttons
+        button_layout = QHBoxLayout()
+        
+        clear_btn = QPushButton("Clear History")
+        clear_btn.clicked.connect(lambda: self.clear_history_and_refresh(dialog, history_list))
+        button_layout.addWidget(clear_btn)
+        
+        button_layout.addStretch()
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+
+    def navigate_to_history_item(self, item):
+        """Navigate to a URL from history"""
+        url = item.data(Qt.ItemDataRole.UserRole)
+        if url:
+            current_browser = self.tabs.currentWidget()
+            if current_browser and isinstance(current_browser, QWebEngineView):
+                current_browser.setUrl(QUrl(url))
+
+    def clear_history_and_refresh(self, dialog, history_list):
+        """Clear history and refresh the dialog"""
+        reply = QMessageBox.question(self, 'Clear History', 
+                                   'Are you sure you want to clear all browsing history?',
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db.clear_history()
+            history_list.clear()
+            QMessageBox.information(self, 'History Cleared', 'Browsing history has been cleared.')
+
     def get_clean_title(self, raw_title, url):
         """Get actual website title from the loaded page"""
         url_string = url.toString()
@@ -544,6 +806,11 @@ class Browser(QMainWindow):
 
         self.url_bar.setText(q.toString())
         self.url_bar.setCursorPosition(0)
+
+    def closeEvent(self, event):
+        """Save current session before closing"""
+        self.save_current_session()
+        event.accept()
 
 
 app = QApplication(sys.argv)

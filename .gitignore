@@ -3,5 +3,7 @@ main.build
 main.dist
 main.onefile-build
 build
-
+dist
 main.exe
+
+pybrowse.db
