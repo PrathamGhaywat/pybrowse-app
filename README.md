@@ -2,7 +2,16 @@
 This is a python browser written in python using the PyQt6 Framework
 
 ## Download
-Check the release tab. Currently only compiled for x64_86.
+Check the release tab. Currently only compiled for x64_86 for Windows. If you want to compile it look below:
+
+## Compile guide:
+to compile the thing for your OS and architecture please clonethe repo and run the command:
+```bash
+pip install pyinstaller
+```
+```bash
+pyinstaller --onefile --noconsole --add-data "pybrowse_home.html;." main.py
+```
 
 ## Features
 1. Multi-Engine search = Use your favourite search engine(Google, Bing, DuckDuckGo, Brave, Ecosia)
