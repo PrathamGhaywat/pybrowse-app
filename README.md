@@ -7,6 +7,9 @@ Check the release tab. Currently only compiled for x64_86 for Windows. If you wa
 ## Compile guide:
 to compile the thing for your OS and architecture please clonethe repo and run the command:
 ```bash
+pip install -r requirements.txt
+```
+```bash
 pip install pyinstaller
 ```
 ```bash
