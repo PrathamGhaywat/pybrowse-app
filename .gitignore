@@ -1,0 +1,7 @@
+# Build files
+main.build
+main.dist
+main.onefile-build
+build
+
+main.exe
