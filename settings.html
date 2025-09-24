@@ -316,11 +316,8 @@
         }
 
         function clearHistory() {
-            if (confirm('Are you sure you want to clear all browsing history? This action cannot be undone.')) {
-                // Call PyQt bridge to clear history
-                alert('History would be cleared (implement PyQt bridge)');
-                loadHistory();
-            }
+            // This function will be overridden by Python injection
+            console.log('clearHistory called - should be overridden by Python');
         }
 
         function saveCurrentSession() {
@@ -334,11 +331,8 @@
         }
 
         function clearAllData() {
-            if (confirm('Are you sure you want to clear ALL browsing data including history and sessions? This action cannot be undone.')) {
-                // Call PyQt bridge to clear all data
-                alert('All data would be cleared (implement PyQt bridge)');
-                loadData();
-            }
+            // This function will be overridden by Python injection
+            console.log('clearAllData called - should be overridden by Python');
         }
 
         function exportData() {

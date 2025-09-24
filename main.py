@@ -7,6 +7,7 @@ from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import *
 from PyQt6.QtWebEngineWidgets import *
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineSettings
+from PyQt6.QtWebChannel import QWebChannel
 
 def resource_path(relative_path):
     """Get absolute path for dev and for PyInstaller bundle"""
@@ -14,6 +15,8 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         return os.path.join(sys._MEIPASS, relative_path)  # type: ignore
     return os.path.join(os.path.abspath("."), relative_path)
+
+# JavaScriptBridge removed - now using URL-based communication
 
 class BrowserDatabase:
     """Handle SQLite database operations for browser history and sessions"""
@@ -155,17 +158,6 @@ class SearchInterceptor(QWebEngineUrlRequestInterceptor):
         
         # Debug: Uncomment to see all requests (for troubleshooting)
         # print(f"Request: {url}")
-        
-        # Handle special pybrowse-action:// URLs for settings actions
-        if url.startswith('pybrowse-action://'):
-            if url == 'pybrowse-action://clear-history':
-                self.browser.clear_browser_history()
-                info.block(True)  # Block the request since it's just an action
-                return
-            elif url == 'pybrowse-action://clear-all-data':
-                self.browser.clear_all_browser_data()
-                info.block(True)
-                return
         
         # Only intercept Google searches from our home page and redirect to selected engine
         if "google.com/search?q=" in url and hasattr(self.browser, 'search_engine_combo'):
@@ -621,31 +613,40 @@ class Browser(QMainWindow):
             historyContainer.innerHTML = '<div class="no-history">No browsing history found</div>';
             """
         
-        # Add JavaScript functions to communicate with Python
+        # Set up direct JavaScript-Python communication
         js_code += """
-        // Override the clearHistory function to communicate with Python
+        // Override the clearHistory function - no confirmation dialog
         window.clearHistory = function() {
-            if (confirm('Are you sure you want to clear all browsing history? This action cannot be undone.')) {
-                // Use a special URL that the interceptor will catch
-                fetch('pybrowse-action://clear-history').then(() => {
-                    // Reload the page to refresh the data
-                    location.reload();
-                }).catch(() => {
-                    // Fallback - just reload to refresh
-                    location.reload();
-                });
-            }
+            console.log('clearHistory called - clearing immediately');
+            
+            // Set a flag that Python can check
+            window.shouldClearHistory = true;
+            
+            // Show loading message
+            const historyContainer = document.getElementById('history-container');
+            historyContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Clearing history...</div>';
+            
+            // Trigger Python check
+            setTimeout(function() {
+                location.reload();
+            }, 100);
         };
         
-        // Override other functions too
+        // Override clearAllData function - no confirmation dialog  
         window.clearAllData = function() {
-            if (confirm('Are you sure you want to clear ALL browsing data including history and sessions? This action cannot be undone.')) {
-                fetch('pybrowse-action://clear-all-data').then(() => {
-                    location.reload();
-                }).catch(() => {
-                    location.reload();
-                });
-            }
+            console.log('clearAllData called - clearing immediately');
+            
+            // Set a flag that Python can check
+            window.shouldClearAllData = true;
+            
+            // Show loading message
+            const historyContainer = document.getElementById('history-container');
+            historyContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Clearing all data...</div>';
+            
+            // Trigger Python check
+            setTimeout(function() {
+                location.reload();
+            }, 100);
         };
         
         window.refreshHistory = function() {
@@ -653,10 +654,42 @@ class Browser(QMainWindow):
         };
         """
         
-        # Execute the JavaScript
+        # Execute the JavaScript and set up polling for action flags
         page = browser.page()
         if page:
             page.runJavaScript(js_code)
+            
+            # Set up a timer to check for JavaScript action flags
+            def check_javascript_actions():
+                def handle_clear_history(result):
+                    if result:
+                        print("Clear history flag detected, clearing history...")
+                        self.clear_browser_history()
+                        # Refresh the page after clearing
+                        QTimer.singleShot(200, lambda: page.runJavaScript("location.reload();"))
+                
+                def handle_clear_all_data(result):
+                    if result:
+                        print("Clear all data flag detected, clearing all data...")
+                        self.clear_all_browser_data()
+                        # Refresh the page after clearing
+                        QTimer.singleShot(200, lambda: page.runJavaScript("location.reload();"))
+                
+                # Check for clear history flag
+                page.runJavaScript("window.shouldClearHistory || false", handle_clear_history)
+                
+                # Check for clear all data flag
+                page.runJavaScript("window.shouldClearAllData || false", handle_clear_all_data)
+            
+            # Start polling every 500ms
+            timer = QTimer()
+            timer.timeout.connect(check_javascript_actions)
+            timer.start(500)
+            
+            # Store timer in main browser object to prevent garbage collection
+            if not hasattr(self, 'action_timers'):
+                self.action_timers = []
+            self.action_timers.append(timer)
 
     def add_to_history(self, browser):
         """Add current page to browsing history"""
