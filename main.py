@@ -16,7 +16,178 @@ def resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)  # type: ignore
     return os.path.join(os.path.abspath("."), relative_path)
 
-# JavaScriptBridge removed - now using URL-based communication
+class PasswordManager(QObject):
+    """Handle password detection, saving, and auto-fill functionality"""
+    
+    def __init__(self, browser):
+        super().__init__()
+        self.browser = browser
+        self.pending_save_data = {}  # Store data for save prompts
+    
+    def inject_password_detection_script(self, page):
+        """Inject JavaScript to detect login forms and handle password saving"""
+        
+        password_script = """
+        (function() {
+            // Password manager detection script
+            let passwordForms = [];
+            let isFormSubmitted = false;
+            
+            function detectPasswordForms() {
+                const forms = document.querySelectorAll('form');
+                passwordForms = [];
+                
+                forms.forEach(form => {
+                    const passwordInputs = form.querySelectorAll('input[type="password"]');
+                    const usernameInputs = form.querySelectorAll('input[type="text"], input[type="email"], input[name*="user"], input[name*="email"], input[name*="login"]');
+                    
+                    if (passwordInputs.length > 0 && usernameInputs.length > 0) {
+                        passwordForms.push({
+                            form: form,
+                            usernameField: usernameInputs[0],
+                            passwordField: passwordInputs[0]
+                        });
+                        
+                        // Add form submission listener
+                        form.addEventListener('submit', function(e) {
+                            const username = usernameInputs[0].value;
+                            const password = passwordInputs[0].value;
+                            
+                            if (username && password) {
+                                isFormSubmitted = true;
+                                // Signal to Python that we want to save password
+                                window.pendingPasswordSave = {
+                                    url: window.location.href,
+                                    domain: window.location.hostname,
+                                    username: username,
+                                    password: password
+                                };
+                                console.log('Password form submitted, ready to save');
+                            }
+                        });
+                    }
+                });
+                
+                return passwordForms.length > 0;
+            }
+            
+            // Auto-fill function
+            window.autoFillPassword = function(username, password) {
+                passwordForms.forEach(formData => {
+                    if (formData.usernameField && formData.passwordField) {
+                        formData.usernameField.value = username;
+                        formData.passwordField.value = password;
+                        
+                        // Trigger change events
+                        formData.usernameField.dispatchEvent(new Event('input', {bubbles: true}));
+                        formData.passwordField.dispatchEvent(new Event('input', {bubbles: true}));
+                    }
+                });
+            };
+            
+            // Check for forms when DOM is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', detectPasswordForms);
+            } else {
+                detectPasswordForms();
+            }
+            
+            // Also check periodically for dynamically added forms
+            setInterval(detectPasswordForms, 2000);
+            
+            // Mark that password manager is active
+            window.passwordManagerActive = true;
+            
+        })();
+        """
+        
+        page.runJavaScript(password_script)
+    
+    def check_for_password_save(self, page):
+        """Check if there's a pending password save request"""
+        
+        def handle_password_data(result):
+            if result and isinstance(result, dict):
+                url = result.get('url', '')
+                domain = result.get('domain', '')
+                username = result.get('username', '')
+                password = result.get('password', '')
+                
+                if url and username and password:
+                    self.prompt_save_password(url, domain, username, password)
+                    # Clear the pending save
+                    page.runJavaScript("window.pendingPasswordSave = null;")
+        
+        page.runJavaScript("window.pendingPasswordSave", handle_password_data)
+    
+    def prompt_save_password(self, url, domain, username, password):
+        """Show dialog to ask user if they want to save the password"""
+        
+        # Create a custom dialog
+        dialog = QDialog(self.browser)
+        dialog.setWindowTitle("💾 Save Password")
+        dialog.setFixedSize(400, 200)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Message
+        message = QLabel(f"Save password for {username} on {domain}?")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        
+        # Username display
+        username_label = QLabel(f"Username: {username}")
+        layout.addWidget(username_label)
+        
+        # Password display (masked)
+        password_label = QLabel(f"Password: {'•' * len(password)}")
+        layout.addWidget(password_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        save_btn = QPushButton("💾 Save")
+        save_btn.clicked.connect(lambda: self.save_password_and_close(dialog, url, domain, username, password))
+        button_layout.addWidget(save_btn)
+        
+        never_btn = QPushButton("❌ Never for this site")
+        never_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(never_btn)
+        
+        not_now_btn = QPushButton("⏭️ Not now")
+        not_now_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(not_now_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Show dialog
+        dialog.exec()
+    
+    def save_password_and_close(self, dialog, url, domain, username, password):
+        """Save the password and close the dialog"""
+        success = self.browser.db.save_password(url, domain, username, password)
+        if success:
+            print(f"Password saved for {username} on {domain}")
+        dialog.accept()
+    
+    def auto_fill_passwords(self, page, domain):
+        """Auto-fill saved passwords for the current domain"""
+        
+        saved_passwords = self.browser.db.get_saved_passwords(domain)
+        
+        if saved_passwords:
+            # Use the most recently used password
+            url, domain, username, password, last_used = saved_passwords[0]
+            
+            # Inject auto-fill JavaScript
+            autofill_script = f"""
+            if (window.autoFillPassword) {{
+                window.autoFillPassword('{username}', '{password}');
+            }}
+            """
+            
+            page.runJavaScript(autofill_script)
+            print(f"Auto-filled password for {username} on {domain}")
 
 class BrowserDatabase:
     """Handle SQLite database operations for browser history and sessions"""
@@ -51,6 +222,20 @@ class BrowserDatabase:
                 title TEXT,
                 is_current_tab BOOLEAN DEFAULT 0,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create passwords table for password manager
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS passwords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(url, username)
             )
         ''')
         
@@ -145,6 +330,63 @@ class BrowserDatabase:
         cursor.execute('DELETE FROM history')
         conn.commit()
         conn.close()
+    
+    def save_password(self, url, domain, username, password):
+        """Save or update a password"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO passwords (url, domain, username, password, last_used)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (url, domain, username, password))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error saving password: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    def get_saved_passwords(self, domain=None):
+        """Get saved passwords, optionally filtered by domain"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        if domain:
+            cursor.execute('''
+                SELECT url, domain, username, password, last_used 
+                FROM passwords 
+                WHERE domain = ? 
+                ORDER BY last_used DESC
+            ''', (domain,))
+        else:
+            cursor.execute('''
+                SELECT url, domain, username, password, last_used 
+                FROM passwords 
+                ORDER BY last_used DESC
+            ''')
+        
+        passwords = cursor.fetchall()
+        conn.close()
+        return passwords
+    
+    def delete_password(self, url, username):
+        """Delete a specific password"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM passwords WHERE url = ? AND username = ?', (url, username))
+        conn.commit()
+        conn.close()
+    
+    def clear_all_passwords(self):
+        """Clear all saved passwords"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM passwords')
+        conn.commit()
+        conn.close()
 
 
 
@@ -199,6 +441,9 @@ class Browser(QMainWindow):
 
         # Initialize database
         self.db = BrowserDatabase()
+        
+        # Initialize password manager
+        self.password_manager = PasswordManager(self)
         
         self.search_interceptor = SearchInterceptor(self)
 
@@ -259,6 +504,12 @@ class Browser(QMainWindow):
         history_btn.setStatusTip("View browsing history")
         history_btn.triggered.connect(self.show_history)
         navbar.addAction(history_btn)
+        
+        # Add password manager button
+        password_btn = QAction("🔐", self)
+        password_btn.setStatusTip("Password Manager")
+        password_btn.triggered.connect(self.show_password_manager)
+        navbar.addAction(password_btn)
 
         # Apply modern styling
         self.apply_modern_styling()
@@ -557,6 +808,53 @@ class Browser(QMainWindow):
                 url = browser.url().toString()
                 if 'settings.html' in url:
                     self.populate_settings_page(browser)
+                else:
+                    # Set up password management for regular web pages
+                    self.setup_password_management(browser)
+
+    def setup_password_management(self, browser):
+        """Set up password detection and auto-fill for a browser tab"""
+        if not isinstance(browser, QWebEngineView):
+            return
+            
+        page = browser.page()
+        if not page:
+            return
+            
+        url = browser.url().toString()
+        
+        # Skip password management for local files and special URLs
+        if url.startswith('file://') or url.startswith('about:') or url.startswith('chrome://'):
+            return
+        
+        # Extract domain
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc.replace('www.', '')
+            
+            if domain:
+                # Inject password detection script
+                self.password_manager.inject_password_detection_script(page)
+                
+                # Try to auto-fill if we have saved passwords
+                QTimer.singleShot(1000, lambda: self.password_manager.auto_fill_passwords(page, domain))
+                
+                # Set up periodic checking for password save requests
+                def check_password_saves():
+                    self.password_manager.check_for_password_save(page)
+                
+                timer = QTimer()
+                timer.timeout.connect(check_password_saves)
+                timer.start(2000)  # Check every 2 seconds
+                
+                # Store timer to prevent garbage collection
+                if not hasattr(self, 'password_timers'):
+                    self.password_timers = []
+                self.password_timers.append(timer)
+                
+        except Exception as e:
+            print(f"Error setting up password management: {e}")
 
     def populate_settings_page(self, browser):
         """Inject data into the settings page"""
@@ -566,12 +864,14 @@ class Browser(QMainWindow):
         # Get statistics from database
         history_data = self.db.get_history(1000)  # Get more data for stats
         session_data = self.db.restore_session()
+        password_data = self.db.get_saved_passwords()
         
         # Calculate statistics
         total_history = len(history_data)
         unique_sites = len(set(url for url, _, _, _ in history_data))
         total_visits = sum(visits for _, _, _, visits in history_data)
         current_tabs = self.tabs.count()
+        saved_passwords = len(password_data)
         
         # Prepare JavaScript to update the page
         js_code = f"""
@@ -580,6 +880,12 @@ class Browser(QMainWindow):
         document.getElementById('unique-sites').textContent = '{unique_sites}';
         document.getElementById('total-visits').textContent = '{total_visits}';
         document.getElementById('current-tabs').textContent = '{current_tabs}';
+        
+        // Update password stats if element exists
+        const passwordStats = document.getElementById('saved-passwords');
+        if (passwordStats) {{
+            passwordStats.textContent = '{saved_passwords}';
+        }}
         
         // Populate history
         const historyContainer = document.getElementById('history-container');
@@ -795,6 +1101,125 @@ class Browser(QMainWindow):
             current_browser = self.tabs.currentWidget()
             if current_browser and isinstance(current_browser, QWebEngineView):
                 current_browser.setUrl(QUrl(url))
+
+    def show_password_manager(self):
+        """Show password manager dialog"""
+        passwords = self.db.get_saved_passwords()
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("🔐 Password Manager")
+        dialog.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Header
+        header = QLabel("Saved Passwords")
+        header.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Create password list
+        password_list = QTableWidget()
+        password_list.setColumnCount(4)
+        password_list.setHorizontalHeaderLabels(["Website", "Username", "Password", "Last Used"])
+        
+        # Set column widths
+        password_list.setColumnWidth(0, 200)
+        password_list.setColumnWidth(1, 150)
+        password_list.setColumnWidth(2, 150)
+        password_list.setColumnWidth(3, 150)
+        
+        # Populate table
+        password_list.setRowCount(len(passwords))
+        for row, (url, domain, username, password, last_used) in enumerate(passwords):
+            # Website
+            password_list.setItem(row, 0, QTableWidgetItem(domain))
+            
+            # Username
+            password_list.setItem(row, 1, QTableWidgetItem(username))
+            
+            # Password (masked)
+            password_item = QTableWidgetItem("•" * len(password))
+            password_item.setData(Qt.ItemDataRole.UserRole, password)  # Store real password
+            password_list.setItem(row, 2, password_item)
+            
+            # Last used
+            password_list.setItem(row, 3, QTableWidgetItem(last_used))
+            
+            # Store full data for deletion
+            website_item = password_list.item(row, 0)
+            if website_item:
+                website_item.setData(Qt.ItemDataRole.UserRole, (url, username))
+        
+        layout.addWidget(password_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        # Show/Hide password button
+        toggle_btn = QPushButton("👁️ Show Passwords")
+        toggle_btn.setCheckable(True)
+        toggle_btn.toggled.connect(lambda checked: self.toggle_password_visibility(password_list, checked))
+        button_layout.addWidget(toggle_btn)
+        
+        # Delete selected button
+        delete_btn = QPushButton("🗑️ Delete Selected")
+        delete_btn.clicked.connect(lambda: self.delete_selected_password(password_list))
+        button_layout.addWidget(delete_btn)
+        
+        # Clear all button
+        clear_all_btn = QPushButton("🧹 Clear All")
+        clear_all_btn.clicked.connect(lambda: self.clear_all_passwords_and_refresh(dialog, password_list))
+        button_layout.addWidget(clear_all_btn)
+        
+        button_layout.addStretch()
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+
+    def toggle_password_visibility(self, table, show_passwords):
+        """Toggle between showing and hiding passwords"""
+        for row in range(table.rowCount()):
+            password_item = table.item(row, 2)
+            if password_item:
+                real_password = password_item.data(Qt.ItemDataRole.UserRole)
+                if show_passwords:
+                    password_item.setText(real_password)
+                else:
+                    password_item.setText("•" * len(real_password))
+
+    def delete_selected_password(self, table):
+        """Delete the selected password"""
+        current_row = table.currentRow()
+        if current_row >= 0:
+            item = table.item(current_row, 0)
+            if item:
+                url, username = item.data(Qt.ItemDataRole.UserRole)
+                
+                reply = QMessageBox.question(self, 'Delete Password',
+                                           f'Delete password for {username}?',
+                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.db.delete_password(url, username)
+                    table.removeRow(current_row)
+                    QMessageBox.information(self, 'Password Deleted', 'Password has been deleted.')
+
+    def clear_all_passwords_and_refresh(self, dialog, table):
+        """Clear all passwords and refresh the dialog"""
+        reply = QMessageBox.question(self, 'Clear All Passwords',
+                                   'Are you sure you want to delete ALL saved passwords?',
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db.clear_all_passwords()
+            table.setRowCount(0)
+            QMessageBox.information(self, 'Passwords Cleared', 'All passwords have been deleted.')
 
     def clear_history_and_refresh(self, dialog, history_list):
         """Clear history and refresh the dialog"""

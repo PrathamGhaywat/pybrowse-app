@@ -253,6 +253,10 @@
                     <div class="stat-number" id="current-tabs">0</div>
                     <div class="stat-label">Open Tabs</div>
                 </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="saved-passwords">0</div>
+                    <div class="stat-label">Saved Passwords</div>
+                </div>
             </div>
         </div>
 
@@ -304,6 +308,7 @@
             document.getElementById('unique-sites').textContent = '---';
             document.getElementById('total-visits').textContent = '---';
             document.getElementById('current-tabs').textContent = '---';
+            document.getElementById('saved-passwords').textContent = '---';
         }
 
         function loadHistory() {
