@@ -256,8 +256,7 @@
     </div>
 
     <div class="header">
-        <a href="#">⚙️ Settings</a>
-        <a href="#">ℹ️ About</a>
+        <a href="javascript:void(0)" onclick="openSettings()">⚙️ Settings</a>
     </div>
     
     <div class="main-container">
@@ -311,6 +310,13 @@
                 // Google "I'm Feeling Lucky" search
                 window.location.href = 'https://www.google.com/search?q=' + encodeURIComponent(query) + '&btnI=1';
             }
+        }
+        
+        function openSettings() {
+            // Navigate to settings page using relative path
+            const currentPath = window.location.href;
+            const basePath = currentPath.substring(0, currentPath.lastIndexOf('/') + 1);
+            window.location.href = basePath + 'settings.html';
         }
         
         // Handle Enter key

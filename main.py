@@ -156,6 +156,17 @@ class SearchInterceptor(QWebEngineUrlRequestInterceptor):
         # Debug: Uncomment to see all requests (for troubleshooting)
         # print(f"Request: {url}")
         
+        # Handle special pybrowse-action:// URLs for settings actions
+        if url.startswith('pybrowse-action://'):
+            if url == 'pybrowse-action://clear-history':
+                self.browser.clear_browser_history()
+                info.block(True)  # Block the request since it's just an action
+                return
+            elif url == 'pybrowse-action://clear-all-data':
+                self.browser.clear_all_browser_data()
+                info.block(True)
+                return
+        
         # Only intercept Google searches from our home page and redirect to selected engine
         if "google.com/search?q=" in url and hasattr(self.browser, 'search_engine_combo'):
             current_engine = self.browser.search_engine_combo.currentText()
@@ -303,8 +314,8 @@ class Browser(QMainWindow):
         browser.urlChanged.connect(lambda qurl, browser=browser:
                                    self.update_urlbar(qurl, browser))
 
-        browser.loadFinished.connect(lambda _, i=i, browser=browser:
-                                     self.update_tab_title(i, browser))
+        browser.loadFinished.connect(lambda success, i=i, browser=browser:
+                                     self.on_page_load_finished(success, i, browser))
                                      
         # Track page loads for history
         browser.loadFinished.connect(lambda success, browser=browser:
@@ -543,6 +554,110 @@ class Browser(QMainWindow):
                 
         return "🌐"  # Default fallback
 
+    def on_page_load_finished(self, success, tab_index, browser):
+        """Handle page load completion"""
+        if success:
+            # Update tab title
+            self.update_tab_title(tab_index, browser)
+            
+            # Check if this is the settings page and populate it
+            if isinstance(browser, QWebEngineView):
+                url = browser.url().toString()
+                if 'settings.html' in url:
+                    self.populate_settings_page(browser)
+
+    def populate_settings_page(self, browser):
+        """Inject data into the settings page"""
+        if not isinstance(browser, QWebEngineView):
+            return
+            
+        # Get statistics from database
+        history_data = self.db.get_history(1000)  # Get more data for stats
+        session_data = self.db.restore_session()
+        
+        # Calculate statistics
+        total_history = len(history_data)
+        unique_sites = len(set(url for url, _, _, _ in history_data))
+        total_visits = sum(visits for _, _, _, visits in history_data)
+        current_tabs = self.tabs.count()
+        
+        # Prepare JavaScript to update the page
+        js_code = f"""
+        // Update statistics
+        document.getElementById('total-history').textContent = '{total_history}';
+        document.getElementById('unique-sites').textContent = '{unique_sites}';
+        document.getElementById('total-visits').textContent = '{total_visits}';
+        document.getElementById('current-tabs').textContent = '{current_tabs}';
+        
+        // Populate history
+        const historyContainer = document.getElementById('history-container');
+        historyContainer.innerHTML = '';
+        """
+        
+        # Add history items (limit to 20 for performance)
+        for i, (url, title, visit_time, visit_count) in enumerate(history_data[:20]):
+            # Escape quotes for JavaScript
+            safe_title = (title or url).replace("'", "\\'").replace('"', '\\"')
+            safe_url = url.replace("'", "\\'").replace('"', '\\"')
+            safe_time = visit_time.replace("'", "\\'").replace('"', '\\"')
+            
+            js_code += f"""
+            const historyItem{i} = document.createElement('div');
+            historyItem{i}.className = 'history-item';
+            historyItem{i}.innerHTML = `
+                <div class="history-title">{safe_title}</div>
+                <div class="history-url">{safe_url}</div>
+                <div class="history-meta">
+                    <span>Visited: {safe_time}</span>
+                    <span>{visit_count} visits</span>
+                </div>
+            `;
+            historyItem{i}.onclick = () => navigateToUrl('{safe_url}');
+            historyContainer.appendChild(historyItem{i});
+            """
+        
+        if not history_data:
+            js_code += """
+            historyContainer.innerHTML = '<div class="no-history">No browsing history found</div>';
+            """
+        
+        # Add JavaScript functions to communicate with Python
+        js_code += """
+        // Override the clearHistory function to communicate with Python
+        window.clearHistory = function() {
+            if (confirm('Are you sure you want to clear all browsing history? This action cannot be undone.')) {
+                // Use a special URL that the interceptor will catch
+                fetch('pybrowse-action://clear-history').then(() => {
+                    // Reload the page to refresh the data
+                    location.reload();
+                }).catch(() => {
+                    // Fallback - just reload to refresh
+                    location.reload();
+                });
+            }
+        };
+        
+        // Override other functions too
+        window.clearAllData = function() {
+            if (confirm('Are you sure you want to clear ALL browsing data including history and sessions? This action cannot be undone.')) {
+                fetch('pybrowse-action://clear-all-data').then(() => {
+                    location.reload();
+                }).catch(() => {
+                    location.reload();
+                });
+            }
+        };
+        
+        window.refreshHistory = function() {
+            location.reload();
+        };
+        """
+        
+        # Execute the JavaScript
+        page = browser.page()
+        if page:
+            page.runJavaScript(js_code)
+
     def add_to_history(self, browser):
         """Add current page to browsing history"""
         if isinstance(browser, QWebEngineView):
@@ -659,6 +774,21 @@ class Browser(QMainWindow):
             history_list.clear()
             QMessageBox.information(self, 'History Cleared', 'Browsing history has been cleared.')
 
+    def clear_browser_history(self):
+        """Clear browser history (called from JavaScript)"""
+        self.db.clear_history()
+        print("Browser history cleared")
+
+    def clear_all_browser_data(self):
+        """Clear all browser data including history and sessions (called from JavaScript)"""
+        # Clear history
+        self.db.clear_history()
+        
+        # Clear sessions by saving an empty session
+        self.db.save_session([])
+        
+        print("All browser data cleared")
+
     def get_clean_title(self, raw_title, url):
         """Get actual website title from the loaded page"""
         url_string = url.toString()
@@ -759,6 +889,12 @@ class Browser(QMainWindow):
         if current_browser and isinstance(current_browser, QWebEngineView):
             html_file = resource_path("pybrowse_home.html")
             current_browser.setUrl(QUrl.fromLocalFile(html_file))
+    
+    def navigate_to_settings(self):
+        current_browser = self.tabs.currentWidget()
+        if current_browser and isinstance(current_browser, QWebEngineView):
+            settings_file = resource_path("settings.html")
+            current_browser.setUrl(QUrl.fromLocalFile(settings_file))
 
     def get_search_url(self, query, engine="Google"):
         search_engines = {
