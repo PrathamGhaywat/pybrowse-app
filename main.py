@@ -105,20 +105,30 @@ class PasswordManager(QObject):
     
     def check_for_password_save(self, page):
         """Check if there's a pending password save request"""
-        
-        def handle_password_data(result):
-            if result and isinstance(result, dict):
-                url = result.get('url', '')
-                domain = result.get('domain', '')
-                username = result.get('username', '')
-                password = result.get('password', '')
+        # Safety check: ensure page is still valid
+        try:
+            if not page:
+                return
                 
-                if url and username and password:
-                    self.prompt_save_password(url, domain, username, password)
-                    # Clear the pending save
-                    page.runJavaScript("window.pendingPasswordSave = null;")
-        
-        page.runJavaScript("window.pendingPasswordSave", handle_password_data)
+            def handle_password_data(result):
+                if result and isinstance(result, dict):
+                    url = result.get('url', '')
+                    domain = result.get('domain', '')
+                    username = result.get('username', '')
+                    password = result.get('password', '')
+                    
+                    if url and username and password:
+                        self.prompt_save_password(url, domain, username, password)
+                        # Clear the pending save
+                        try:
+                            page.runJavaScript("window.pendingPasswordSave = null;")
+                        except RuntimeError:
+                            pass  # Page was deleted, ignore
+            
+            page.runJavaScript("window.pendingPasswordSave", handle_password_data)
+        except RuntimeError:
+            # Page was deleted, stop checking
+            pass
     
     def prompt_save_password(self, url, domain, username, password):
         """Show dialog to ask user if they want to save the password"""
@@ -185,7 +195,7 @@ class PasswordManager(QObject):
                 window.autoFillPassword('{username}', '{password}');
             }}
             """
-            
+            # The bridge between python and js is crazy lol
             page.runJavaScript(autofill_script)
             print(f"Auto-filled password for {username} on {domain}")
 
@@ -953,6 +963,12 @@ class Browser(QMainWindow):
 
         # Remove browser widget from content area
         browser = self.web_views[tab_index]
+        
+        # Clean up password timer for this page
+        if hasattr(self, 'password_timers') and browser.page() in self.password_timers:
+            self.password_timers[browser.page()].stop()
+            del self.password_timers[browser.page()]
+        
         self.content_area.removeWidget(browser)
         browser.deleteLater()
 
@@ -1067,10 +1083,18 @@ class Browser(QMainWindow):
                 timer.timeout.connect(check_password_saves)
                 timer.start(2000)  # Check every 2 seconds
                 
-                # Store timer to prevent garbage collection
+                # Store timer associated with the page for cleanup
                 if not hasattr(self, 'password_timers'):
-                    self.password_timers = []
-                self.password_timers.append(timer)
+                    self.password_timers = {}
+                self.password_timers[page] = timer
+                
+                # Clean up timer when page is destroyed
+                def cleanup_timer():
+                    if page in self.password_timers:
+                        self.password_timers[page].stop()
+                        del self.password_timers[page]
+                
+                page.destroyed.connect(cleanup_timer)
                 
         except Exception as e:
             print(f"Error setting up password management: {e}")
