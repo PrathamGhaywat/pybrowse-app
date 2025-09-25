@@ -13,7 +13,7 @@ pip install -r requirements.txt
 pip install pyinstaller
 ```
 ```bash
-pyinstaller --onefile --noconsole --add-data "pybrowse_home.html;." main.py
+pyinstaller --onefile --noconsole --add-data "pybrowse_home.html;." --add-data "settings.html;" main.py
 ```
 
 ## Features
