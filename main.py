@@ -447,69 +447,12 @@ class Browser(QMainWindow):
         
         self.search_interceptor = SearchInterceptor(self)
 
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
-        self.tabs.currentChanged.connect(self.current_tab_changed)
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_current_tab)
-        self.setCentralWidget(self.tabs)
+        # Initialize tab management for sidebar layout
+        self.tab_buttons = []
+        self.current_tab_index = 0
 
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-
-        navbar = QToolBar()
-        self.addToolBar(navbar)
-
-        back_btn = QAction("◀", self)
-        back_btn.setStatusTip("Back to previous page")
-        back_btn.triggered.connect(self.navigate_back)
-        navbar.addAction(back_btn)
-
-        forward_btn = QAction("▶", self)
-        forward_btn.setStatusTip("Forward to next page")
-        forward_btn.triggered.connect(self.navigate_forward)
-        navbar.addAction(forward_btn)
-
-        reload_btn = QAction("🔄", self)
-        reload_btn.setStatusTip("Reload page")
-        reload_btn.triggered.connect(self.navigate_reload)
-        navbar.addAction(reload_btn)
-
-        home_btn = QAction("🏠", self)
-        home_btn.setStatusTip("Go home")
-        home_btn.triggered.connect(self.navigate_home)
-        navbar.addAction(home_btn)
-
-        self.url_bar = QLineEdit()
-        self.url_bar.returnPressed.connect(self.navigate_to_url)
-        navbar.addWidget(self.url_bar)
-
-        # Search engine dropdown
-        self.search_engine_combo = QComboBox()
-        self.search_engine_combo.addItems(["Google", "Bing", "DuckDuckGo", "Brave", "Ecosia"])
-        self.search_engine_combo.setCurrentText("Google")
-        self.search_engine_combo.setToolTip("Select search engine")
-        navbar.addWidget(self.search_engine_combo)
-
-        stop_btn = QAction("⛔", self)
-        stop_btn.setStatusTip("Stop loading current page")
-        stop_btn.triggered.connect(self.navigate_stop)
-        navbar.addAction(stop_btn)
-
-        # Add separator and history button
-        navbar.addSeparator()
-        
-        history_btn = QAction("📚", self)
-        history_btn.setStatusTip("View browsing history")
-        history_btn.triggered.connect(self.show_history)
-        navbar.addAction(history_btn)
-        
-        # Add password manager button
-        password_btn = QAction("🔐", self)
-        password_btn.setStatusTip("Password Manager")
-        password_btn.triggered.connect(self.show_password_manager)
-        navbar.addAction(password_btn)
+        # Create main layout with sidebar
+        self.setup_modern_layout()
 
         # Apply modern styling
         self.apply_modern_styling()
@@ -518,6 +461,150 @@ class Browser(QMainWindow):
         self.restore_previous_session()
 
         self.show()
+
+    def setup_modern_layout(self):
+        """Create Arc/Zen browser inspired layout with vertical sidebar"""
+        # Create main widget and layout
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Create sidebar for tabs
+        self.setup_sidebar()
+        
+        # Create main content area
+        self.setup_content_area()
+        
+        # Add sidebar and content to main layout
+        main_layout.addWidget(self.sidebar)
+        main_layout.addWidget(self.content_area, 1)  # Give content area more space
+        
+        self.setCentralWidget(main_widget)
+    
+    def setup_sidebar(self):
+        """Create the left sidebar with vertical tabs"""
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(250)
+        self.sidebar.setObjectName("sidebar")
+        
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+        sidebar_layout.setSpacing(4)
+        
+        # Add browser logo/title
+        logo_label = QLabel("PyBrowse")
+        logo_label.setObjectName("logo")
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(logo_label)
+        
+        # Add new tab button
+        self.new_tab_btn = QPushButton("+ New Tab")
+        self.new_tab_btn.setObjectName("newTabBtn")
+        self.new_tab_btn.clicked.connect(lambda: self.add_new_tab())
+        sidebar_layout.addWidget(self.new_tab_btn)
+        
+        # Create scroll area for tabs
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        # Tab container widget
+        self.tab_container = QWidget()
+        self.tab_layout = QVBoxLayout(self.tab_container)
+        self.tab_layout.setContentsMargins(0, 0, 0, 0)
+        self.tab_layout.setSpacing(2)
+        self.tab_layout.addStretch()  # Push tabs to top
+        
+        scroll_area.setWidget(self.tab_container)
+        sidebar_layout.addWidget(scroll_area, 1)
+        
+        # Add settings and controls at bottom
+        self.setup_sidebar_controls(sidebar_layout)
+        
+        # Store tab widgets for management
+        self.tab_widgets = []
+        self.current_tab_index = 0
+    
+    def setup_sidebar_controls(self, layout):
+        """Add navigation controls to sidebar bottom"""
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(4)
+        
+        # Navigation buttons row
+        nav_widget = QWidget()
+        nav_layout = QHBoxLayout(nav_widget)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(4)
+        
+        self.back_btn = QPushButton("◀")
+        self.back_btn.setFixedSize(32, 32)
+        self.back_btn.clicked.connect(self.navigate_back)
+        nav_layout.addWidget(self.back_btn)
+        
+        self.forward_btn = QPushButton("▶")
+        self.forward_btn.setFixedSize(32, 32)
+        self.forward_btn.clicked.connect(self.navigate_forward)
+        nav_layout.addWidget(self.forward_btn)
+        
+        self.refresh_btn = QPushButton("🔄")
+        self.refresh_btn.setFixedSize(32, 32)
+        self.refresh_btn.clicked.connect(self.navigate_reload)
+        nav_layout.addWidget(self.refresh_btn)
+        
+        self.home_btn = QPushButton("🏠")
+        self.home_btn.setFixedSize(32, 32)
+        self.home_btn.clicked.connect(self.navigate_home)
+        nav_layout.addWidget(self.home_btn)
+        
+        nav_layout.addStretch()
+        controls_layout.addWidget(nav_widget)
+        
+        # URL bar
+        self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Search or enter address...")
+        self.url_bar.returnPressed.connect(self.navigate_to_url)
+        controls_layout.addWidget(self.url_bar)
+        
+        # Search engine selector
+        self.search_engine_combo = QComboBox()
+        self.search_engine_combo.addItems(["Google", "Bing", "DuckDuckGo", "Brave", "Ecosia"])
+        self.search_engine_combo.setCurrentText("Google")
+        controls_layout.addWidget(self.search_engine_combo)
+        
+        # Action buttons
+        actions_widget = QWidget()
+        actions_layout = QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(4)
+        
+        history_btn = QPushButton("📚")
+        history_btn.setFixedSize(32, 32)
+        history_btn.setToolTip("History")
+        history_btn.clicked.connect(self.show_history)
+        actions_layout.addWidget(history_btn)
+        
+        password_btn = QPushButton("🔐")
+        password_btn.setFixedSize(32, 32)
+        password_btn.setToolTip("Passwords")
+        password_btn.clicked.connect(self.show_password_manager)
+        actions_layout.addWidget(password_btn)
+        
+        actions_layout.addStretch()
+        controls_layout.addWidget(actions_widget)
+        
+        layout.addWidget(controls_widget)
+    
+    def setup_content_area(self):
+        """Create the main content area for web pages"""
+        self.content_area = QStackedWidget()
+        self.content_area.setObjectName("contentArea")
+        
+        # This will hold all the QWebEngineView widgets
+        self.web_views = []
 
     def add_new_tab(self, qurl=None, label="Blank"):
         if qurl is None:
@@ -550,116 +637,214 @@ class Browser(QMainWindow):
             # Set up console message filtering
             page.javaScriptConsoleMessage = self.filter_console_messages
 
-        i = self.tabs.addTab(browser, label)
-
-        self.tabs.setCurrentIndex(i)
+        # Add to content area
+        tab_index = self.content_area.addWidget(browser)
+        self.web_views.append(browser)
+        
+        # Create tab button in sidebar
+        self.create_tab_button(browser, label, tab_index)
+        
+        # Set as current tab
+        self.set_current_tab(tab_index)
 
         browser.urlChanged.connect(lambda qurl, browser=browser:
                                    self.update_urlbar(qurl, browser))
 
-        browser.loadFinished.connect(lambda success, i=i, browser=browser:
-                                     self.on_page_load_finished(success, i, browser))
+        browser.loadFinished.connect(lambda success, tab_index=tab_index, browser=browser:
+                                     self.on_page_load_finished(success, tab_index, browser))
                                      
         # Track page loads for history
         browser.loadFinished.connect(lambda success, browser=browser:
                                     self.add_to_history(browser) if success else None)
                                      
         # Also update tab title when URL changes (for immediate feedback)
-        browser.urlChanged.connect(lambda qurl, browser=browser, i=i:
-                                  self.update_tab_title_on_url_change(i, browser, qurl))
+        browser.urlChanged.connect(lambda qurl, browser=browser, tab_index=tab_index:
+                                  self.update_tab_title_on_url_change(tab_index, browser, qurl))
                                   
         # Update tab title when icon changes (real favicon loaded)
-        browser.iconChanged.connect(lambda icon, i=i, browser=browser:
-                                   self.update_tab_title(i, browser))
+        browser.iconChanged.connect(lambda icon, tab_index=tab_index, browser=browser:
+                                   self.update_tab_title(tab_index, browser))
                                    
-        # Update tab title when page title changes
-        browser.titleChanged.connect(lambda title, i=i, browser=browser:
-                                    self.update_tab_title(i, browser))
+        # Update tab title when page title changes  
+        browser.titleChanged.connect(lambda title, tab_index=tab_index, browser=browser:
+                                    self.update_tab_title(tab_index, browser))
+
+    def create_tab_button(self, browser, label, tab_index):
+        """Create a tab button in the sidebar"""
+        tab_button = QPushButton(label)
+        tab_button.setObjectName("tabButton")
+        tab_button.setCheckable(True)
+        tab_button.clicked.connect(lambda: self.set_current_tab(tab_index))
+        
+        # Add close button
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(20, 20)
+        close_btn.setObjectName("closeBtn")
+        close_btn.clicked.connect(lambda: self.close_tab(tab_index))
+        
+        # Create container for tab button and close button
+        tab_widget = QWidget()
+        tab_layout = QHBoxLayout(tab_widget)
+        tab_layout.setContentsMargins(4, 2, 4, 2)
+        tab_layout.addWidget(tab_button, 1)
+        tab_layout.addWidget(close_btn)
+        
+        # Insert before the stretch at the end
+        self.tab_layout.insertWidget(self.tab_layout.count() - 1, tab_widget)
+        
+        # Store the tab widget for updates
+        self.tab_widgets.append({
+            'widget': tab_widget,
+            'button': tab_button,
+            'close_btn': close_btn,
+            'browser': browser,
+            'index': tab_index
+        })
+    
+    def set_current_tab(self, tab_index):
+        """Switch to the specified tab"""
+        if 0 <= tab_index < len(self.web_views):
+            self.content_area.setCurrentIndex(tab_index)
+            self.current_tab_index = tab_index
+            
+            # Update button states
+            for i, tab_info in enumerate(self.tab_widgets):
+                tab_info['button'].setChecked(i == tab_index)
+            
+            # Update URL bar
+            current_browser = self.web_views[tab_index]
+            if current_browser:
+                self.url_bar.setText(current_browser.url().toString())
+    
+
 
     def apply_modern_styling(self):
-        # Modern dark theme styling inspired by Brave browser
+        # Arc/Zen browser inspired styling with sidebar
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #1a1a1a;
+                background-color: #0A0A0A;
                 color: #ffffff;
             }
             
-            QTabWidget::pane {
-                border: 1px solid #3a3a3a;
-                background-color: #1a1a1a;
-                border-radius: 8px;
+            /* Sidebar Styling */
+            QWidget#sidebar {
+                background-color: #1C1C1E;
+                border-right: 1px solid #2C2C2C;
             }
             
-            QTabWidget::tab-bar {
-                alignment: left;
+            QLabel#logo {
+                font-size: 18px;
+                font-weight: bold;
+                color: #007AFF;
+                padding: 12px 0px;
+                background: transparent;
             }
             
-            QTabBar::tab {
-                background-color: #2a2a2a;
+            /* New Tab Button */
+            QPushButton#newTabBtn {
+                background-color: #007AFF;
                 color: #ffffff;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                border: 1px solid #3a3a3a;
-                min-width: 120px;
-            }
-            
-            QTabBar::tab:selected {
-                background-color: #3a3a3a;
-                border-bottom-color: #3a3a3a;
-            }
-            
-            QTabBar::tab:hover {
-                background-color: #4a4a4a;
-            }
-            
-            QTabBar::close-button {
-                image: url(none);
-                subcontrol-position: right;
-                margin: 4px;
-            }
-            
-            QTabBar::close-button:hover {
-                background-color: #ff6b6b;
-                border-radius: 4px;
-            }
-            
-            QToolBar {
-                background-color: #2a2a2a;
                 border: none;
-                spacing: 8px;
-                padding: 8px;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 500;
+                font-size: 13px;
             }
             
-            QLineEdit {
-                background-color: #3a3a3a;
+            QPushButton#newTabBtn:hover {
+                background-color: #0056CC;
+            }
+            
+            QPushButton#newTabBtn:pressed {
+                background-color: #003D99;
+            }
+            
+            /* Tab Buttons in Sidebar */
+            QPushButton#tabButton {
+                background-color: transparent;
+                color: #E5E5E7;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                text-align: left;
+                font-size: 13px;
+                margin: 1px 0px;
+            }
+            
+            QPushButton#tabButton:hover {
+                background-color: #2C2C2C;
+            }
+            
+            QPushButton#tabButton:checked {
+                background-color: #007AFF;
                 color: #ffffff;
-                border: 2px solid #4a4a4a;
-                border-radius: 20px;
-                padding: 8px 16px;
+            }
+            
+            QPushButton#closeBtn {
+                background-color: transparent;
+                color: #8E8E93;
+                border: none;
+                border-radius: 10px;
                 font-size: 14px;
-                min-height: 20px;
+                font-weight: bold;
+            }
+            
+            QPushButton#closeBtn:hover {
+                background-color: #FF3B30;
+                color: #ffffff;
+            }
+            
+            /* Content Area */
+            QStackedWidget#contentArea {
+                background-color: #0A0A0A;
+                border: none;
+            }
+            
+            /* Navigation Controls */
+            QPushButton {
+                background-color: #2C2C2C;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            
+            QPushButton:hover {
+                background-color: #3C3C3C;
+            }
+            
+            QPushButton:pressed {
+                background-color: #4C4C4C;
+            }
+            
+            /* URL Bar */
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
             }
             
             QLineEdit:focus {
-                border-color: #ff6b35;
-                background-color: #4a4a4a;
+                border-color: #007AFF;
+                background: rgba(255, 255, 255, 0.15);
             }
             
+            /* ComboBox */
             QComboBox {
-                background-color: #3a3a3a;
+                background-color: #2C2C2C;
                 color: #ffffff;
-                border: 2px solid #4a4a4a;
-                border-radius: 12px;
+                border: 1px solid #3C3C3C;
+                border-radius: 6px;
                 padding: 6px 12px;
                 font-size: 12px;
-                min-width: 100px;
             }
             
             QComboBox:hover {
-                border-color: #ff6b35;
-                background-color: #4a4a4a;
+                border-color: #007AFF;
+                background-color: #3C3C3C;
             }
             
             QComboBox::drop-down {
@@ -667,32 +852,36 @@ class Browser(QMainWindow):
                 width: 20px;
             }
             
-            QComboBox::down-arrow {
-                image: none;
-                border-style: none;
-            }
-            
             QComboBox QAbstractItemView {
-                background-color: #3a3a3a;
+                background-color: #2C2C2C;
                 color: #ffffff;
-                selection-background-color: #ff6b35;
-                border: 1px solid #4a4a4a;
-                border-radius: 8px;
+                selection-background-color: #007AFF;
+                border: 1px solid #3C3C3C;
+                border-radius: 6px;
             }
             
-            QStatusBar {
-                background-color: #2a2a2a;
-                color: #cccccc;
-                border-top: 1px solid #3a3a3a;
+            /* Scroll Area */
+            QScrollArea {
+                border: none;
+                background-color: transparent;
             }
             
-            QAction {
-                color: #ffffff;
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+                border-radius: 4px;
+            }
+            
+            QScrollBar::handle:vertical {
+                background: #3C3C3C;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            
+            QScrollBar::handle:vertical:hover {
+                background: #4C4C4C;
             }
         """)
-        
-        # Style individual buttons to look more modern
-        self.style_navigation_buttons()
 
     def style_navigation_buttons(self):
         # Find all actions in the toolbar and style them
@@ -745,17 +934,49 @@ class Browser(QMainWindow):
                     return  # Don't log this message
 
     def current_tab_changed(self, i):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             qurl = current_browser.url()
             self.update_urlbar(qurl, current_browser)
             self.update_title(current_browser)
 
     def close_current_tab(self, i):
-        if self.tabs.count() < 2:
+        if len(self.tab_buttons) < 2:
             return
 
-        self.tabs.removeTab(i)
+        self.close_tab(i)
+    
+    def close_tab(self, i):
+        """Close a specific tab by index"""
+        if i < 0 or i >= len(self.tab_buttons):
+            return
+            
+        # Don't allow closing the last tab
+        if len(self.tab_buttons) < 2:
+            return
+        
+        # Get the browser widget before removing button
+        browser_widget = self.content_area.widget(i)
+        if browser_widget and isinstance(browser_widget, QWebEngineView):
+            browser_widget.stop()
+        
+        # Remove tab button from sidebar
+        button = self.tab_buttons.pop(i)
+        button.setParent(None)
+        button.deleteLater()
+        
+        # Remove browser from content area
+        self.content_area.removeWidget(browser_widget)
+        if browser_widget:
+            browser_widget.deleteLater()
+        
+        # Update active tab if needed
+        if i <= self.current_tab_index and self.current_tab_index > 0:
+            self.current_tab_index -= 1
+            
+        # Set new current tab
+        if self.tab_buttons:
+            self.set_current_tab(min(self.current_tab_index, len(self.tab_buttons) - 1))
 
     def get_favicon_as_text(self, browser):
         """Extract favicon from browser and convert to text representation"""
@@ -870,7 +1091,7 @@ class Browser(QMainWindow):
         total_history = len(history_data)
         unique_sites = len(set(url for url, _, _, _ in history_data))
         total_visits = sum(visits for _, _, _, visits in history_data)
-        current_tabs = self.tabs.count()
+        current_tabs = len(self.tab_buttons)
         saved_passwords = len(password_data)
         
         # Prepare JavaScript to update the page
@@ -1008,15 +1229,14 @@ class Browser(QMainWindow):
     def get_current_session_data(self):
         """Get data for all currently open tabs"""
         tabs_data = []
-        current_index = self.tabs.currentIndex()
         
-        for i in range(self.tabs.count()):
-            browser = self.tabs.widget(i)
+        for i in range(self.content_area.count()):
+            browser = self.content_area.widget(i)
             if isinstance(browser, QWebEngineView):
                 url = browser.url().toString()
                 page = browser.page()
                 title = page.title() if page else ""
-                is_current = (i == current_index)
+                is_current = (i == self.current_tab_index)
                 tabs_data.append((url, title, is_current))
         
         return tabs_data
@@ -1036,8 +1256,17 @@ class Browser(QMainWindow):
             return
         
         # Clear existing tabs first
-        while self.tabs.count() > 0:
-            self.tabs.removeTab(0)
+        while self.content_area.count() > 0:
+            widget = self.content_area.widget(0)
+            self.content_area.removeWidget(widget)
+            if widget:
+                widget.deleteLater()
+        
+        # Clear tab buttons
+        for button in self.tab_buttons:
+            button.setParent(None)
+            button.deleteLater()
+        self.tab_buttons.clear()
         
         current_tab_index = 0
         # Restore each tab
@@ -1049,8 +1278,8 @@ class Browser(QMainWindow):
                     current_tab_index = tab_index
         
         # Set the previously active tab
-        if current_tab_index < self.tabs.count():
-            self.tabs.setCurrentIndex(current_tab_index)
+        if current_tab_index < len(self.tab_buttons):
+            self.set_current_tab(current_tab_index)
 
     def show_history(self):
         """Show browsing history in a dialog"""
@@ -1098,7 +1327,7 @@ class Browser(QMainWindow):
         """Navigate to a URL from history"""
         url = item.data(Qt.ItemDataRole.UserRole)
         if url:
-            current_browser = self.tabs.currentWidget()
+            current_browser = self.get_current_browser()
             if current_browser and isinstance(current_browser, QWebEngineView):
                 current_browser.setUrl(QUrl(url))
 
@@ -1277,40 +1506,27 @@ class Browser(QMainWindow):
             return "New Page"
 
     def update_tab_title(self, tab_index, browser):
-        if isinstance(browser, QWebEngineView):
+        if isinstance(browser, QWebEngineView) and 0 <= tab_index < len(self.tab_widgets):
             page = browser.page()
             if page:
                 raw_title = page.title()
                 url = browser.url()
                 
-                # Debug: Print what we're working with
-                print(f"Debug - URL: {url.toString()}")
-                print(f"Debug - Raw title: '{raw_title}'")
-                
                 # Get clean title - just the website name
                 clean_title = self.get_clean_title(raw_title, url)
                 
-                print(f"Debug - Clean title: '{clean_title}'")
-                
-                # Set tab text to just the clean site name
-                self.tabs.setTabText(tab_index, clean_title)
-                
-                # Clear any icons
-                from PyQt6.QtGui import QIcon
-                self.tabs.setTabIcon(tab_index, QIcon())
+                # Update the tab button text in sidebar
+                self.tab_widgets[tab_index]['button'].setText(clean_title)
 
     def update_tab_title_on_url_change(self, tab_index, browser, qurl):
         """Update tab title immediately when URL changes for better UX"""
-        if isinstance(browser, QWebEngineView):
+        if isinstance(browser, QWebEngineView) and 0 <= tab_index < len(self.tab_widgets):
             # Show loading state while page loads
-            self.tabs.setTabText(tab_index, "Loading...")
-            
-            # Clear any icons
-            from PyQt6.QtGui import QIcon
-            self.tabs.setTabIcon(tab_index, QIcon())
+            self.tab_widgets[tab_index]['button'].setText("Loading...")
 
     def update_title(self, browser):
-        if browser != self.tabs.currentWidget():
+        current_browser = self.web_views[self.current_tab_index] if self.web_views else None
+        if browser != current_browser:
             return
 
         if isinstance(browser, QWebEngineView):
@@ -1318,41 +1534,47 @@ class Browser(QMainWindow):
             if page:
                 title = page.title()
                 if title:
-                    self.setWindowTitle(f"🚀 {title} - PyBrowse")
+                    self.setWindowTitle(f"{title} - PyBrowse")
                 else:
-                    self.setWindowTitle("🚀 PyBrowse - Privacy-First Browser")
+                    self.setWindowTitle("PyBrowse - Privacy-First Browser")
 
     def navigate_back(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.back()
 
     def navigate_forward(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.forward()
 
     def navigate_reload(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.reload()
 
     def navigate_stop(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.stop()
 
     def navigate_home(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             html_file = resource_path("pybrowse_home.html")
             current_browser.setUrl(QUrl.fromLocalFile(html_file))
     
     def navigate_to_settings(self):
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             settings_file = resource_path("settings.html")
             current_browser.setUrl(QUrl.fromLocalFile(settings_file))
+    
+    def get_current_browser(self):
+        """Get the currently active browser widget"""
+        if self.web_views and 0 <= self.current_tab_index < len(self.web_views):
+            return self.web_views[self.current_tab_index]
+        return None
 
     def get_search_url(self, query, engine="Google"):
         search_engines = {
@@ -1373,7 +1595,7 @@ class Browser(QMainWindow):
         else:
             search_url = self.get_search_url(query, current_engine)
         
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.setUrl(QUrl(search_url))
 
@@ -1390,12 +1612,13 @@ class Browser(QMainWindow):
             else:
                 q.setScheme("http")
         
-        current_browser = self.tabs.currentWidget()
+        current_browser = self.get_current_browser()
         if current_browser and isinstance(current_browser, QWebEngineView):
             current_browser.setUrl(q)
 
     def update_urlbar(self, q, browser=None):
-        if browser != self.tabs.currentWidget():
+        current_browser = self.get_current_browser()
+        if browser != current_browser:
             return
 
         self.url_bar.setText(q.toString())
@@ -1409,6 +1632,6 @@ class Browser(QMainWindow):
 
 app = QApplication(sys.argv)
 QApplication.setApplicationName("PyBrowse")
-QApplication.setApplicationDisplayName("🚀 PyBrowse - Privacy-First Browser")
+QApplication.setApplicationDisplayName("PyBrowse - Privacy-First Browser")
 window = Browser()
 app.exec()
