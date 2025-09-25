@@ -946,37 +946,35 @@ class Browser(QMainWindow):
 
         self.close_tab(i)
     
-    def close_tab(self, i):
-        """Close a specific tab by index"""
-        if i < 0 or i >= len(self.tab_buttons):
-            return
-            
-        # Don't allow closing the last tab
-        if len(self.tab_buttons) < 2:
-            return
-        
-        # Get the browser widget before removing button
-        browser_widget = self.content_area.widget(i)
-        if browser_widget and isinstance(browser_widget, QWebEngineView):
-            browser_widget.stop()
-        
-        # Remove tab button from sidebar
-        button = self.tab_buttons.pop(i)
-        button.setParent(None)
-        button.deleteLater()
-        
-        # Remove browser from content area
-        self.content_area.removeWidget(browser_widget)
-        if browser_widget:
-            browser_widget.deleteLater()
-        
-        # Update active tab if needed
-        if i <= self.current_tab_index and self.current_tab_index > 0:
-            self.current_tab_index -= 1
-            
-        # Set new current tab
-        if self.tab_buttons:
-            self.set_current_tab(min(self.current_tab_index, len(self.tab_buttons) - 1))
+    def close_tab(self, tab_index):
+        """Close the specified tab in sidebar system"""
+        if len(self.web_views) <= 1:
+            return  # Don't close the last tab
+
+        # Remove browser widget from content area
+        browser = self.web_views[tab_index]
+        self.content_area.removeWidget(browser)
+        browser.deleteLater()
+
+        # Remove from web views list
+        self.web_views.pop(tab_index)
+
+        # Remove tab widget from sidebar
+        tab_info = self.tab_widgets.pop(tab_index)
+        tab_info['widget'].deleteLater()
+
+        # Update indices for remaining tabs and reconnect signals
+        for i, tab_info in enumerate(self.tab_widgets):
+            tab_info['index'] = i
+            tab_info['button'].clicked.disconnect()
+            tab_info['button'].clicked.connect(lambda checked, idx=i: self.set_current_tab(idx))
+            tab_info['close_btn'].clicked.disconnect()
+            tab_info['close_btn'].clicked.connect(lambda checked, idx=i: self.close_tab(idx))
+
+        # Switch to another tab
+        if tab_index >= len(self.web_views):
+            tab_index = len(self.web_views) - 1
+        self.set_current_tab(tab_index)
 
     def get_favicon_as_text(self, browser):
         """Extract favicon from browser and convert to text representation"""
