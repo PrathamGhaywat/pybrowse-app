@@ -2,7 +2,7 @@
 This is a python browser written in python using the PyQt6 Framework
 
 ## Download
-Check the release tab. Currently only compiled for x64_86 for Windows. If you want to compile it look below:
+Check the release tab(https://github.com/PrathamGhaywat/pybrowse-app/releases). Currently only compiled for x64_86 for Windows 11. If you want to compile it look below:
 
 ## Compile guide:
 to compile the thing for your OS and architecture please clone the repo and run the command:
